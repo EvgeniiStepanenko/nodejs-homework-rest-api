@@ -2,12 +2,13 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import User from "../models/user.js";
 import { ctrlWrapper } from "../decorators/index.js";
-import { HttpError } from "../helpers/index.js";
+import { HttpError, sendEmail, createVerifyEmail } from "../helpers/index.js";
 import dotenv from "dotenv";
 import gravatar from "gravatar";
 import path from "path";
 import fs from "fs";
 import Jimp from "jimp";
+import { nanoid } from "nanoid";
 
 dotenv.config();
 
@@ -24,14 +25,41 @@ const signup = async (req, res) => {
 
   const userAvatar = gravatar.url(email);
   const hashPassword = await bcrypt.hash(password, 10);
+
+  const verificationToken = nanoid();
+
   const newUser = await User.create({
     ...req.body,
     password: hashPassword,
     avatarURL: userAvatar,
+    verificationToken,
   });
+
+  const verifyEmail = createVerifyEmail({ email, verificationToken });
+
+  await sendEmail(verifyEmail);
 
   res.status(201).json({
     email: newUser.email,
+  });
+};
+
+const verify = async (req, res) => {
+  const { verificationToken } = req.params;
+  const user = await User.findOne({ verificationToken });
+  if (!user) {
+    throw HttpError(404, "User not found");
+  }
+  await User.findByIdAndUpdate(user._id, {
+    verify: true,
+    verificationToken: "",
+  });
+  res.json({
+    message: "Verify success",
+  });
+
+  res.status(200).json({
+    message: "Verification successful",
   });
 };
 
@@ -41,6 +69,10 @@ const signin = async (req, res) => {
 
   if (!user) {
     throw HttpError(401, "Email or password is wrong");
+  }
+
+  if (!user.verify) {
+    throw HttpError(401, "Email not verify");
   }
 
   const passwordCopmare = await bcrypt.compare(password, user.password);
@@ -107,6 +139,7 @@ const updateAvatar = async (req, res) => {
 
 export default {
   signup: ctrlWrapper(signup),
+  verify: ctrlWrapper(verify),
   signin: ctrlWrapper(signin),
   getCurrent: ctrlWrapper(getCurrent),
   signout: ctrlWrapper(signout),
